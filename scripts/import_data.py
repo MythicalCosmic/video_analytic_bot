@@ -13,8 +13,18 @@ from core.config import config
 
 
 async def create_tables(conn: asyncpg.Connection):
-    await conn.execute("DROP TABLE IF EXISTS video_snapshots CASCADE")
-    await conn.execute("DROP TABLE IF EXISTS videos CASCADE")
+    tables_exist = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = 'videos'
+        )
+    """)
+    
+    if tables_exist:
+        print("Tables already exist, skipping creation")
+        return False
+    
+    print("Creating tables...")
     
     await conn.execute("""
         CREATE TABLE videos (
@@ -48,6 +58,7 @@ async def create_tables(conn: asyncpg.Connection):
     """)
     
     print("Tables created")
+    return True
 
 
 async def create_indexes(conn: asyncpg.Connection):
@@ -110,34 +121,40 @@ async def import_data():
     
     start_time = time.time()
     
-    print(f"Loading JSON from: {json_path}")
-    
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    
-    videos_data = data['videos']
-    print(f"Found {len(videos_data)} videos")
-    
-    print("Preparing records...")
-    
-    video_records: List[Tuple] = []
-    snapshot_records: List[Tuple] = []
-    
-    for video in videos_data:
-        video_records.append(prepare_video_record(video))
-        
-        for snapshot in video.get('snapshots', []):
-            snapshot_records.append(prepare_snapshot_record(snapshot))
-    
-    print(f"Prepared {len(video_records)} videos, {len(snapshot_records)} snapshots")
-    
     dsn = config.asyncpg_dsn
     print(f"Connecting to: {config.db_host}:{config.db_port}/{config.db_name}")
     
     conn = await asyncpg.connect(dsn=dsn)
     
     try:
-        await create_tables(conn)
+        tables_created = await create_tables(conn)
+        
+        if not tables_created:
+            existing_count = await conn.fetchval("SELECT COUNT(*) FROM videos")
+            if existing_count > 0:
+                print(f"Database already has {existing_count} videos. Skipping import.")
+                return
+        
+        print(f"Loading JSON from: {json_path}")
+        
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        videos_data = data['videos']
+        print(f"Found {len(videos_data)} videos")
+        
+        print("Preparing records...")
+        
+        video_records: List[Tuple] = []
+        snapshot_records: List[Tuple] = []
+        
+        for video in videos_data:
+            video_records.append(prepare_video_record(video))
+            
+            for snapshot in video.get('snapshots', []):
+                snapshot_records.append(prepare_snapshot_record(snapshot))
+        
+        print(f"Prepared {len(video_records)} videos, {len(snapshot_records)} snapshots")
         
         print("Inserting videos...")
         await conn.copy_records_to_table(
