@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 @dataclass
 class Config:
@@ -33,6 +33,7 @@ class Config:
     @classmethod
     def from_env(cls):
         """Load configuration from environment variables"""
+        # Force reload environment variables (Docker overrides)
         db_host = os.getenv("DB_HOST", "localhost")
         db_port = int(os.getenv("DB_PORT", "5432"))
         db_name = os.getenv("DB_NAME", "video_analytic")
@@ -67,7 +68,7 @@ class Config:
     
     @property
     def asyncpg_dsn(self) -> str:
-        """DSN for raw asyncpg connections (fastest)"""
+        """Build DSN dynamically - uses current db_host value"""
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
 
