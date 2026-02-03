@@ -8,6 +8,7 @@ from core.config import config
 from core.logging import setup_logging
 from database.database import init_db
 from bot.handlers import register_handlers
+from bot.middlewares import AuthMiddleware, ThrottlingMiddleware
 
 load_dotenv()
 setup_logging()
@@ -18,6 +19,8 @@ async def main():
     """Initialize and start the bot"""
     bot = Bot(token=config.bot_token)
     dp = Dispatcher()
+    dp.message.middleware(ThrottlingMiddleware(rate_limit=0.5))
+    dp.message.middleware(AuthMiddleware())
     
     await init_db()
     logger.info("Database initialized")
