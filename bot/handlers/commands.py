@@ -1,25 +1,22 @@
-"""
-Command handlers
-"""
 from aiogram import Router
-from aiogram.filters import Command
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
-from bot.keyboards.inline import get_main_keyboard
 
 router = Router()
 
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    """Handle /start command"""
-    await message.answer(
-        f"Hello, {message.from_user.first_name}!\n\n"
-        "Welcome to your bot powered by Boundless-Aiogram.",
-        reply_markup=get_main_keyboard()
-    )
 
+@router.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    #used translator for this btw :)
+    await message.answer(
+        "Привет! Я бот для аналитики видео.\n\n"
+        "Задайте вопрос на русском языке, например:\n"
+        "• Сколько всего видео в системе?\n"
+        "• Сколько видео набрало больше 100000 просмотров?\n"
+        "• На сколько просмотров выросли видео 28 ноября 2025?"
+    )
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    """Handle /help command"""
     await message.answer(
         "Available commands:\n"
         "/start - Start the bot\n"

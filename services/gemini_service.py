@@ -62,6 +62,16 @@ CRITICAL RULES:
    - Use COALESCE(SUM(...), 0) to return 0 instead of NULL
    - NO markdown, NO explanations, NO comments, NO backticks
 
+5. IF the question cannot be answered using ONLY the provided schema and rules,
+    RETURN EXACTLY:
+
+    return: "idk man, i dont have that"
+
+    DO NOT invent metrics.
+    DO NOT assume formulas.
+    DO NOT explain.
+
+
 EXAMPLES:
 
 Q: Сколько всего видео есть в системе?
@@ -92,36 +102,45 @@ class GeminiService:
     
     def __init__(self):
         self.api_key = config.gemini_api_key
-        self.model = config.gemini_model
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        self.model = "llama-3.1-8b-instant"
+        self.base_url = "https://api.groq.com/openai/v1/chat/completions"
     
     async def generate_sql(self, user_question: str) -> Optional[str]:
-        url = f"{self.base_url}/{self.model}:generateContent?key={self.api_key}"
-        
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": f"{SYSTEM_PROMPT}\n\n{user_question}"}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 500,
-            }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
         }
         
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 200,
+            "top_p": 1,
+            "stop": ["\n\n"]
+        }
+
+
+        
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
+            async with session.post(self.base_url, headers=headers, json=payload) as response:
                 if response.status != 200:
                     error_text = await response.text()
-                    raise Exception(f"Gemini API error: {response.status} - {error_text}")
+                    raise Exception(f"AI API error: {response.status} - {error_text}")
                 
                 data = await response.json()
         
         try:
-            sql = data["candidates"][0]["content"]["parts"][0]["text"]
+            sql = data["choices"][0]["message"]["content"]
             sql = self._clean_sql(sql)
             return sql
         except (KeyError, IndexError):
@@ -146,4 +165,4 @@ class GeminiService:
         return sql
 
 
-gemini_service = GeminiService()    
+gemini_service = GeminiService()
