@@ -71,6 +71,25 @@ CRITICAL RULES:
     DO NOT assume formulas.
     DO NOT explain.
 
+6. If the question asks about:
+   - "most popular/watched/viewed videos" WITHOUT specifying a metric
+   - first N videos
+   - last N videos
+   - top N videos
+   - earliest or latest videos
+
+   Default assumptions:
+   - "most popular" = sort by likes_count
+   - "most watched/viewed" = sort by views_count
+   - If no number specified, use TOP 10
+   - If unclear whether to COUNT or SUM, use SUM of the metric
+
+   You MUST:
+   - first select the videos using ORDER BY + LIMIT in a subquery
+   - then apply aggregation (SUM / COUNT) in the outer query
+
+   NEVER use ORDER BY or LIMIT in the same SELECT as an aggregate function.
+
 
 EXAMPLES:
 
@@ -94,6 +113,22 @@ A: SELECT COALESCE(SUM(likes_count), 0) FROM videos
 
 Q: Сколько видео вышло в ноябре 2025?
 A: SELECT COUNT(*) FROM videos WHERE video_created_at::date BETWEEN '2025-11-01' AND '2025-11-30'
+
+Q: Сколько просмотров у самых популярных 10 видео?
+A: SELECT COALESCE(SUM(views_count), 0) FROM (SELECT views_count FROM videos ORDER BY views_count DESC LIMIT 10) AS top_videos
+
+Q: Most popular videos?
+A: SELECT COALESCE(SUM(likes_count), 0) FROM (SELECT likes_count FROM videos ORDER BY likes_count DESC LIMIT 10) AS top_videos
+
+Q: Most watched videos?
+A: SELECT COALESCE(SUM(views_count), 0) FROM (SELECT views_count FROM videos ORDER BY views_count DESC LIMIT 10) AS top_videos
+
+Q: Most viewed videos?
+A: SELECT COALESCE(SUM(views_count), 0) FROM (SELECT views_count FROM videos ORDER BY views_count DESC LIMIT 10) AS top_videos
+
+Q: How many views do the top 5 videos have?
+A: SELECT COALESCE(SUM(views_count), 0) FROM (SELECT views_count FROM videos ORDER BY views_count DESC LIMIT 5) AS top_videos
+
 
 Generate SQL for this question:"""
 

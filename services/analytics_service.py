@@ -13,9 +13,17 @@ class AnalyticsService:
             
             if not sql:
                 return None, "Не удалось сгенерировать SQL запрос"
+
+            if "idk man" in sql.lower():
+                return None, "Этот запрос нельзя корректно посчитать по текущим данным. Уточните, по какому полю сортировать и какую метрику использовать."
             
+
             if not self._is_safe_query(sql):
                 return None, "Запрос содержит недопустимые операции"
+        
+            if not self._returns_single_value(sql):
+                return None, "Этот запрос нельзя корректно посчитать по текущим данным"
+
             
             result = await self._execute_query(sql)
             
@@ -27,22 +35,24 @@ class AnalyticsService:
             return None, f"Ошибка: {str(e)}"
     
     def _is_safe_query(self, sql: str) -> bool:
-        sql_upper = sql.upper()
-        
+        sql_upper = sql.upper().strip()
+
+        if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
+            return False
+
         dangerous_keywords = [
             "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-            "TRUNCATE", "GRANT", "REVOKE", "EXEC", "EXECUTE",
-            "INTO", "SET", "MERGE"
+            "TRUNCATE", "GRANT", "REVOKE", "MERGE",
+            "EXEC", "EXECUTE",
+            "SELECT INTO"
         ]
-        
+
         for keyword in dangerous_keywords:
             if keyword in sql_upper:
                 return False
-        
-        if not sql_upper.strip().startswith("SELECT"):
-            return False
-        
+
         return True
+
     
     async def _execute_query(self, sql: str) -> Optional[int]:
         conn = await asyncpg.connect(dsn=config.asyncpg_dsn)
@@ -57,6 +67,11 @@ class AnalyticsService:
             
         finally:
             await conn.close()
+
+
+    def _returns_single_value(self, sql: str) -> bool:
+        sql_upper = sql.upper()
+        return "COUNT(" in sql_upper or "SUM(" in sql_upper
 
 
 analytics_service = AnalyticsService()
