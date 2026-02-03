@@ -40,15 +40,17 @@ class AnalyticsService:
         if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
             return False
 
-        dangerous_keywords = [
-            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-            "TRUNCATE", "GRANT", "REVOKE", "MERGE",
-            "EXEC", "EXECUTE",
-            "SELECT INTO"
+        dangerous_patterns = [
+            r'\bINSERT\b', r'\bUPDATE\b', r'\bDELETE\b', 
+            r'\bDROP\b', r'\bCREATE\s+TABLE\b', r'\bCREATE\s+DATABASE\b',
+            r'\bALTER\b', r'\bTRUNCATE\b', r'\bGRANT\b', 
+            r'\bREVOKE\b', r'\bMERGE\b', r'\bEXEC\b', 
+            r'\bEXECUTE\b', r'\bSELECT\s+INTO\b'
         ]
-
-        for keyword in dangerous_keywords:
-            if keyword in sql_upper:
+        
+        import re
+        for pattern in dangerous_patterns:
+            if re.search(pattern, sql_upper):
                 return False
 
         return True
