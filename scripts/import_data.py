@@ -1,31 +1,21 @@
-"""
-High-performance JSON data importer
-
-Uses asyncpg's COPY protocol for maximum insert speed.
-Imports 358 videos + 35,946 snapshots in seconds.
-
-Usage:
-    python -m scripts.import_data path/to/videos.json
-"""
 import asyncio
 import json
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
-
-import asyncpg
+import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.config import settings
+import asyncpg
+from core.config import config
 
 
 async def create_tables(conn: asyncpg.Connection):
     await conn.execute("DROP TABLE IF EXISTS video_snapshots CASCADE")
     await conn.execute("DROP TABLE IF EXISTS videos CASCADE")
-
+    
     await conn.execute("""
         CREATE TABLE videos (
             id VARCHAR(36) PRIMARY KEY,
@@ -39,7 +29,7 @@ async def create_tables(conn: asyncpg.Connection):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
-
+    
     await conn.execute("""
         CREATE TABLE video_snapshots (
             id VARCHAR(32) PRIMARY KEY,
@@ -61,7 +51,6 @@ async def create_tables(conn: asyncpg.Connection):
 
 
 async def create_indexes(conn: asyncpg.Connection):
-    
     print("Creating indexes...")
     
     await conn.execute("CREATE INDEX idx_videos_creator_id ON videos(creator_id)")
@@ -73,24 +62,11 @@ async def create_indexes(conn: asyncpg.Connection):
     await conn.execute("CREATE INDEX idx_snapshots_created_at ON video_snapshots(created_at)")
     await conn.execute("CREATE INDEX idx_snapshots_video_created ON video_snapshots(video_id, created_at)")
     
-    await conn.execute("""
-        CREATE INDEX idx_snapshots_created_date 
-        ON video_snapshots((created_at::date))
-    """)
-    
-    await conn.execute("""
-        CREATE INDEX idx_snapshots_delta_positive 
-        ON video_snapshots(video_id, created_at) 
-        WHERE delta_views_count > 0
-    """)
-    
     print("Indexes created")
 
 
 def parse_datetime(dt_str: str) -> datetime:
-    if '.' in dt_str:
-        return datetime.fromisoformat(dt_str.replace('+00:00', '+00:00'))
-    return datetime.fromisoformat(dt_str)
+    return datetime.fromisoformat(dt_str.replace('+00:00', '+00:00'))
 
 
 def prepare_video_record(video: dict) -> Tuple:
@@ -124,13 +100,19 @@ def prepare_snapshot_record(snapshot: dict) -> Tuple:
     )
 
 
-async def import_data(json_path: str):
+async def import_data():
+    json_path = Path(__file__).parent.parent / "data" / "videos.json"
+    
+    if not json_path.exists():
+        print(f"File not found: {json_path}")
+        print("Make sure videos.json is in the 'data' folder!")
+        return
     
     start_time = time.time()
     
     print(f"Loading JSON from: {json_path}")
     
-    with open(json_path, 'r') as f:
+    with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     videos_data = data['videos']
@@ -149,13 +131,15 @@ async def import_data(json_path: str):
     
     print(f"Prepared {len(video_records)} videos, {len(snapshot_records)} snapshots")
     
-    print(f"Connecting to database: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
+    dsn = config.asyncpg_dsn
+    print(f"Connecting to: {config.db_host}:{config.db_port}/{config.db_name}")
     
-    conn = await asyncpg.connect(dsn=settings.asyncpg_dsn)
+    conn = await asyncpg.connect(dsn=dsn)
     
     try:
         await create_tables(conn)
-        print("⚡ Inserting videos...")
+        
+        print("Inserting videos...")
         await conn.copy_records_to_table(
             'videos',
             records=video_records,
@@ -167,7 +151,7 @@ async def import_data(json_path: str):
         )
         print(f"Inserted {len(video_records)} videos")
         
-        print("⚡ Inserting snapshots...")
+        print("Inserting snapshots...")
         await conn.copy_records_to_table(
             'video_snapshots',
             records=snapshot_records,
@@ -181,7 +165,7 @@ async def import_data(json_path: str):
         print(f"Inserted {len(snapshot_records)} snapshots")
         
         await create_indexes(conn)
-
+        
         print("Running ANALYZE...")
         await conn.execute("ANALYZE videos")
         await conn.execute("ANALYZE video_snapshots")
@@ -197,40 +181,51 @@ async def import_data(json_path: str):
 
 
 async def verify_data():
-    conn = await asyncpg.connect(dsn=settings.asyncpg_dsn)
+    dsn = config.asyncpg_dsn
+    conn = await asyncpg.connect(dsn=dsn)
     
     try:
         video_count = await conn.fetchval("SELECT COUNT(*) FROM videos")
         snapshot_count = await conn.fetchval("SELECT COUNT(*) FROM video_snapshots")
         creator_count = await conn.fetchval("SELECT COUNT(DISTINCT creator_id) FROM videos")
         
-        print(f"\n Data verification:")
+        print(f"\nData verification:")
         print(f"   Videos: {video_count}")
         print(f"   Snapshots: {snapshot_count}")
         print(f"   Unique creators: {creator_count}")
+        
+        print("\nTesting sample queries...")
+        
+        result = await conn.fetchval("SELECT COUNT(*) FROM videos")
+        print(f"   Total videos: {result}")
+        
+        result = await conn.fetchval("SELECT COUNT(*) FROM videos WHERE views_count > 100000")
+        print(f"   Videos with >100k views: {result}")
         
         result = await conn.fetchval("""
             SELECT COALESCE(SUM(delta_views_count), 0) 
             FROM video_snapshots 
             WHERE created_at::date = '2025-11-28'
         """)
-        print(f"   Sample query (Nov 28 delta views): {result}")
+        print(f"   Delta views on Nov 28: {result}")
+        
+        result = await conn.fetchval("""
+            SELECT COUNT(DISTINCT video_id) 
+            FROM video_snapshots 
+            WHERE created_at::date = '2025-11-27' AND delta_views_count > 0
+        """)
+        print(f"   Videos with new views on Nov 27: {result}")
+        
+        print("\nAll queries working!")
         
     finally:
         await conn.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m scripts.import_data <path_to_json>")
-        print("Example: python -m scripts.import_data data/videos.json")
-        sys.exit(1)
+    print("=" * 50)
+    print("Video Analytics Data Importer")
+    print("=" * 50)
     
-    json_path = sys.argv[1]
-    
-    if not Path(json_path).exists():
-        print(f"File not found: {json_path}")
-        sys.exit(1)
-    
-    asyncio.run(import_data(json_path))
+    asyncio.run(import_data())
     asyncio.run(verify_data())

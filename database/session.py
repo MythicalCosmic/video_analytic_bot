@@ -3,14 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
-from core.config import settings
+from core.config import config
 
 
 engine = create_async_engine(
-    settings.async_database_url,
+    config.async_database_url,
     echo=False,
-    pool_size=settings.DB_POOL_MIN_SIZE,
-    max_overflow=settings.DB_POOL_MAX_SIZE - settings.DB_POOL_MIN_SIZE,
+    pool_size=config.db_pool_min_size,
+    max_overflow=config.db_pool_max_size - config.db_pool_min_size,
     pool_pre_ping=True,
 )
 
@@ -22,18 +22,18 @@ async_session_maker = async_sessionmaker(
     autoflush=False,
 )
 
+
 class DatabasePool:
     
     _pool: Optional[asyncpg.Pool] = None
     
     @classmethod
     async def get_pool(cls) -> asyncpg.Pool:
-
         if cls._pool is None:
             cls._pool = await asyncpg.create_pool(
-                dsn=settings.asyncpg_dsn,
-                min_size=settings.DB_POOL_MIN_SIZE,
-                max_size=settings.DB_POOL_MAX_SIZE,
+                dsn=config.asyncpg_dsn,
+                min_size=config.db_pool_min_size,
+                max_size=config.db_pool_max_size,
                 command_timeout=60,
             )
         return cls._pool
