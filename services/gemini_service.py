@@ -173,6 +173,9 @@ class GeminiService:
         
         sql = sql.strip()
         
+        lines = sql.split('\n')
+        sql = lines[0].strip()
+        
         if not sql.endswith(";"):
             sql = sql + ";"
         
