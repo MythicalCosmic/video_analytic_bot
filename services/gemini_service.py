@@ -1,4 +1,5 @@
 import aiohttp
+import asyncio
 from typing import Optional
 
 from core.config import config
@@ -54,13 +55,13 @@ CRITICAL RULES:
    - "с 1 по 5 ноября 2025" -> BETWEEN '2025-11-01' AND '2025-11-05'
    - "с 1 ноября 2025 по 5 ноября 2025 включительно" -> BETWEEN '2025-11-01' AND '2025-11-05'
    - Use created_at::date for date comparisons on TIMESTAMP columns
+   - Use video_created_at::date for video publication date filtering
 
-4. Counting vs Summing - VERY IMPORTANT:
+4. Counting vs Summing:
    - "Сколько замеров/записей/snapshots/measurements" = COUNT(*) rows
    - "На сколько выросло/изменилось" = SUM(delta_*) values
    - "How many measurements/records/snapshots had X" = COUNT(*)
    - "отрицательный/negative" + "замеров/measurements/snapshots" = COUNT(*) WHERE delta_* < 0
-   - NEVER use SUM when counting how many records match a condition
 
 5. Output format:
    - Return ONLY valid PostgreSQL SQL query
@@ -69,32 +70,16 @@ CRITICAL RULES:
    - Use COALESCE(SUM(...), 0) to return 0 instead of NULL
    - NO markdown, NO explanations, NO comments, NO backticks
 
-6. IF the question cannot be answered using ONLY the provided schema and rules,
-   RETURN EXACTLY: idk man, i dont have that
-
-7. If the question asks about:
-   - "most popular/watched/viewed videos" WITHOUT specifying a metric
-   - first N videos / last N videos / top N videos
-   - earliest or latest videos
-
-   Default assumptions:
-   - "most popular" = sort by likes_count
-   - "most watched/viewed" = sort by views_count
-   - If no number specified, use TOP 10
-
-   You MUST:
-   - first select the videos using ORDER BY + LIMIT in a subquery
-   - then apply aggregation (SUM / COUNT) in the outer query
-
-   NEVER use ORDER BY or LIMIT in the same SELECT as an aggregate function.
-
 EXAMPLES:
 
 Q: Сколько всего видео есть в системе?
 A: SELECT COUNT(*) FROM videos
 
-Q: Сколько видео у креатора с id 'abc123def456' вышло с 1 ноября 2025 по 5 ноября 2025 включительно?
-A: SELECT COUNT(*) FROM videos WHERE creator_id = 'abc123def456' AND video_created_at::date BETWEEN '2025-11-01' AND '2025-11-05'
+Q: Сколько видео опубликовал креатор с id abc123 в период с 1 ноября 2025 по 5 ноября 2025 включительно?
+A: SELECT COUNT(*) FROM videos WHERE creator_id = 'abc123' AND video_created_at::date BETWEEN '2025-11-01' AND '2025-11-05'
+
+Q: Сколько видео у креатора с id 8b76e572635b400c9052286a56176e03 вышло с 1 ноября 2025 по 5 ноября 2025 включительно?
+A: SELECT COUNT(*) FROM videos WHERE creator_id = '8b76e572635b400c9052286a56176e03' AND video_created_at::date BETWEEN '2025-11-01' AND '2025-11-05'
 
 Q: Сколько видео набрало больше 100000 просмотров за всё время?
 A: SELECT COUNT(*) FROM videos WHERE views_count > 100000
@@ -111,23 +96,11 @@ A: SELECT COALESCE(SUM(likes_count), 0) FROM videos
 Q: Сколько видео вышло в ноябре 2025?
 A: SELECT COUNT(*) FROM videos WHERE video_created_at::date BETWEEN '2025-11-01' AND '2025-11-30'
 
-Q: Сколько всего замеров статистики, в которых число просмотров за час было отрицательным?
+Q: Сколько всего замеров статистики в которых число просмотров за час было отрицательным?
 A: SELECT COUNT(*) FROM video_snapshots WHERE delta_views_count < 0
 
-Q: How many total statistics measurements had negative view growth?
+Q: How many snapshots had negative view growth?
 A: SELECT COUNT(*) FROM video_snapshots WHERE delta_views_count < 0
-
-Q: Сколько замеров с отрицательным приростом просмотров?
-A: SELECT COUNT(*) FROM video_snapshots WHERE delta_views_count < 0
-
-Q: How many snapshots had negative delta views?
-A: SELECT COUNT(*) FROM video_snapshots WHERE delta_views_count < 0
-
-Q: Сколько всего есть замеров статистики по всем видео в которых число просмотров за час оказалось отрицательным?
-A: SELECT COUNT(*) FROM video_snapshots WHERE delta_views_count < 0
-
-Q: Сколько просмотров у самых популярных 10 видео?
-A: SELECT COALESCE(SUM(views_count), 0) FROM (SELECT views_count FROM videos ORDER BY views_count DESC LIMIT 10) AS top_videos
 
 Generate SQL for this question:"""
 
@@ -136,41 +109,56 @@ class GeminiService:
     
     def __init__(self):
         self.api_key = config.gemini_api_key
-        self.model = "llama-3.1-8b-instant"
-        self.base_url = "https://api.groq.com/openai/v1/chat/completions"
+        self.model = "gemini-2.5-flash"
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        self.max_retries = 3
+        self.retry_delay = 2.0
     
     async def generate_sql(self, user_question: str) -> Optional[str]:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        url = f"{self.base_url}/{self.model}:generateContent?key={self.api_key}"
         
         payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_question}
+            "contents": [
+                {
+                    "parts": [
+                        {"text": f"{SYSTEM_PROMPT}\n\n{user_question}"}
+                    ]
+                }
             ],
-            "temperature": 0,
-            "max_tokens": 200,
-            "top_p": 1,
-            "stop": ["\n\n"]
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 200,
+            }
         }
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.base_url, headers=headers, json=payload) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"AI API error: {response.status} - {error_text}")
+        for attempt in range(self.max_retries):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload) as response:
+                        if response.status == 429:
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(self.retry_delay * (attempt + 1))
+                                continue
+                            else:
+                                raise Exception("Rate limit exceeded, please try again")
+                        
+                        if response.status != 200:
+                            error_text = await response.text()
+                            raise Exception(f"Gemini API error: {response.status} - {error_text}")
+                        
+                        data = await response.json()
                 
-                data = await response.json()
+                sql = data["candidates"][0]["content"]["parts"][0]["text"]
+                sql = self._clean_sql(sql)
+                return sql
+                
+            except aiohttp.ClientError as e:
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(self.retry_delay)
+                    continue
+                raise Exception(f"Network error: {str(e)}")
         
-        try:
-            sql = data["choices"][0]["message"]["content"]
-            sql = self._clean_sql(sql)
-            return sql
-        except (KeyError, IndexError):
-            return None
+        return None
     
     def _clean_sql(self, sql: str) -> str:
         sql = sql.strip()
